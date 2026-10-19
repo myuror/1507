@@ -3,80 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Симулятор изменения плоскости орбиты</title>
+    <title>Изменение плоскости орбиты</title>
     <link rel="stylesheet" href="style.css">
-    <!-- Подключение Three.js и контроллеров орбиты для 3D вращения сцены -->
-    <script src="https://cloudflare.com"></script>
-    <script src="https://jsdelivr.net"></script>
 </head>
 <body>
-    <div class="app-container">
+    <div id="app-container">
         <header>
-            <h1>3D Изменение плоскости орбиты</h1>
-            <p class="subtitle">Интерактивный симулятор маневрирования космических аппаратов</p>
+            <h1>Изменение плоскости орбиты</h1>
+            <p class="subtitle">Учебный симулятор зависимости манёвра наклонения от точки импульса</p>
         </header>
 
-        <main class="main-content">
-            <!-- 3D Визуализатор -->
-            <div class="visualizer-container" id="canvasContainer">
-                <!-- Сюда Three.js вставит 3D-сцену -->
-                <div id="telemetry" class="telemetry-overlay">
-                    <div>Скорость корабля: <span id="telemetry-v">0</span> м/с</div>
-                    <div>Угол (аномалия): <span id="telemetry-angle">0</span>°</div>
-                    <div style="color: #8da2bb; font-size: 11px; margin-top: 4px;">💡 Сцену можно вращать и масштабировать</div>
+        <main>
+            <!-- Левая панель: Визуализация -->
+            <section class="visual-section">
+                <canvas id="orbitCanvas"></canvas>
+                <div class="telemetry">
+                    <div>Текущее положение: <span id="telPos">0</span>°</div>
+                    <div>Скорость КА (V): <span id="telSpeed">300</span> м/с</div>
                 </div>
-            </div>
+            </section>
 
-            <!-- Панель управления параметрами -->
-            <div class="controls-container">
-                <div class="control-group">
-                    <label for="maneuverAngle">Точка маневра (Истинная аномалия): <b id="maneuverAngleVal">0°</b></label>
-                    <input type="range" id="maneuverAngle" min="0" max="360" value="0" step="5">
-                    <span class="help-text">0°/360° — Перицентр (близко), 180° — Апоцентр (далеко)</span>
+            <!-- Правая панель: Управление и Результаты -->
+            <section class="control-section">
+                <div class="card controls">
+                    <h2>Настройки манёвра</h2>
+                    
+                    <div class="control-group">
+                        <label for="maneuverAngle">Точка манёвра (угол на орбите): <span id="valManeuver">0</span>°</label>
+                        <input type="range" id="maneuverAngle" min="0" max="360" value="0" step="5">
+                        <small class="hint">Подсказка: 0° и 180° — узлы орбиты (линия пересечения плоскостей).</small>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="targetInclination">Требуемое изменение наклонения (Δi): <span id="valInclination">30</span>°</label>
+                        <input type="range" id="targetInclination" min="10" max="60" value="30" step="5">
+                    </div>
+
+                    <div class="button-actions">
+                        <button id="btnStart" class="btn primary">Запустить симуляцию</button>
+                        <button id="btnReset" class="btn secondary">Сбросить</button>
+                    </div>
                 </div>
 
-                <div class="control-group">
-                    <label for="inclinationDelta">Изменение наклонения (&Delta;i): <b id="inclinationDeltaVal">15°</b></label>
-                    <input type="range" id="inclinationDelta" min="0" max="90" value="15" step="1">
-                    <span class="help-text">Угол пространственного поворота плоскости орбиты</span>
+                <div class="card results" id="resultCard">
+                    <h2>Численный итог и анализ</h2>
+                    <div class="metrics">
+                        <div class="metric-box">
+                            <span class="label">Затраты ΔV (факт):</span>
+                            <span id="resDeltaV" class="value">--</span>
+                        </div>
+                        <div class="metric-box">
+                            <span class="label">Идеальный ΔV (в узле):</span>
+                            <span id="resIdealV" class="value">--</span>
+                        </div>
+                    </div>
+                    <div id="statusMessage" class="status-msg">
+                        Настройте параметры и запустите моделирование для получения оценки.
+                    </div>
                 </div>
-
-                <div class="button-group">
-                    <button id="startBtn" class="btn btn-success">Запустить маневр</button>
-                    <button id="resetBtn" class="btn btn-danger">Сбросить</button>
-                </div>
-            </div>
+            </section>
         </main>
-
-        <!-- Экран результатов -->
-        <section id="resultSection" class="result-container hidden">
-            <h2>Численный итог и анализ маневра</h2>
-            <div class="metrics-grid">
-                <div class="metric-card">
-                    <div class="metric-label">Затраты скорости (&Delta;V)</div>
-                    <div class="metric-value" id="resDeltaV">0 м/с</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-label">Теоретический минимум для &Delta;i</div>
-                    <div class="metric-value" id="resMinDeltaV">0 м/с</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-label">Эффективность маневра</div>
-                    <div class="metric-value" id="resEfficiency">0%</div>
-                </div>
-            </div>
-            
-            <div class="verdict-box" id="verdictBox">
-                <h3 id="verdictTitle">Результат</h3>
-                <p id="verdictText">Описание успеха маневра.</p>
-            </div>
-        </section>
-
+        
         <footer>
-            <p>Учебная 3D модель изменения наклонения эллиптической орбиты в центральном гравитационном поле.</p>
+            <p>Учебная модель. Расчёты выполнены по упрощенным формулам изменения наклонения круговых орбит.</p>
         </footer>
     </div>
-
     <script src="script.js"></script>
 </body>
 </html>
