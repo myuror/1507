@@ -1,325 +1,228 @@
+// Настройка Canvas
 const canvas = document.getElementById('orbitCanvas');
 const ctx = canvas.getContext('2d');
 
-// Элементы управления
-const maneuverAngleInput = document.getElementById('maneuverAngle');
-const inclinationDeltaInput = document.getElementById('inclinationDelta');
-const maneuverAngleVal = document.getElementById('maneuverAngleVal');
-const inclinationDeltaVal = document.getElementById('inclinationDeltaVal');
-const startBtn = document.getElementById('startBtn');
-const resetBtn = document.getElementById('resetBtn');
-
-// Элементы вывода результатов
-const resultSection = document.getElementById('resultSection');
-const resDeltaV = document.getElementById('resDeltaV');
-const resMinDeltaV = document.getElementById('resMinDeltaV');
-const resEfficiency = document.getElementById('resEfficiency');
-const verdictBox = document.getElementById('verdictBox');
-const verdictTitle = document.getElementById('verdictTitle');
-const verdictText = document.getElementById('verdictText');
-
-// Настройки 3D камеры (углы вращения сцены)
-let cameraAngleX = 65 * Math.PI / 180; 
-let cameraAngleZ = -30 * Math.PI / 180; 
-
-// Переменные для интерактивного вращения мышкой
-let isDragging = false;
-let previousMouseX = 0;
-let previousMouseY = 0;
-
-// Параметры орбиты
-const a = 110; 
-const b = 85;  
-const e = Math.sqrt(1 - (b * b) / (a * a)); 
-const focalDist = a * e; 
-const mu = 350000; 
-
-// Состояния анимации корабля и импульса
-let shipAnomaly = 0; 
-let isManeuvering = false; 
-let animProgress = 0; 
-let hasManeuvered = false; 
-
+// Задаем внутреннее разрешение холста
 function resizeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
+    canvas.width = 500;
+    canvas.height = 500;
 }
+resizeCanvas();
 
-// 3D проекция
-function project3D(x, y, z) {
-    let x1 = x * Math.cos(cameraAngleZ) - y * Math.sin(cameraAngleZ);
-    let y1 = x * Math.sin(cameraAngleZ) + y * Math.cos(cameraAngleZ);
+// Элементы интерфейса
+const sliderManeuver = document.getElementById('maneuverAngle');
+const sliderInclination = document.getElementById('targetInclination');
+const valManeuver = document.getElementById('valManeuver');
+const valInclination = document.getElementById('valInclination');
+
+const btnStart = document.getElementById('btnStart');
+const btnReset = document.getElementById('btnReset');
+
+const telPos = document.getElementById('telPos');
+const telSpeed = document.getElementById('telSpeed');
+
+const resDeltaV = document.getElementById('resDeltaV');
+const resIdealV = document.getElementById('resIdealV');
+const statusMessage = document.getElementById('statusMessage');
+
+// Физические константы модели
+const ORBIT_RADIUS = 150; // Радиус орбиты для отрисовки
+const ORBIT_SPEED = 300;  // Базовая скорость КА (м/с) для расчетов
+const FUEL_BUDGET = 220;  // Критический бюджет дельта-V
+
+// Состояние симуляции
+let state = {
+    running: false,
+    shipAngle: 0,        // Текущий угол КА на орбите (в градусах)
+    maneuverAngle: 0,    // Где будет совершен маневр
+    deltaI: 30,          // Изменение наклонения в градусах
+    maneuverDone: false  // Выполнен ли импульс в текущем цикле
+};
+
+// Обновление значений из ползунков
+function updateSliderValues() {
+    state.maneuverAngle = parseInt(sliderManeuver.value);
+    state.deltaI = parseInt(sliderInclination.value);
     
-    let x2 = x1;
-    let y2 = y1 * Math.cos(cameraAngleX) - z * Math.sin(cameraAngleX);
-    let z2 = y1 * Math.sin(cameraAngleX) + z * Math.cos(cameraAngleX);
-
-    const cx = canvas.width / (2 * (window.devicePixelRatio || 1));
-    const cy = canvas.height / (2 * (window.devicePixelRatio || 1));
-
-    return { x: cx + x2, y: cy + y2, z: z2 };
+    valManeuver.innerText = state.maneuverAngle;
+    valInclination.innerText = state.deltaI;
+    
+    if(!state.running) {
+        draw();
+    }
 }
 
-// Расчет скорости КА
-function getOrbitalVelocity(angleRad) {
-    const r = (a * (1 - e * e)) / (1 + e * Math.cos(angleRad));
-    return Math.sqrt(mu * (2 / r - 1 / a));
+sliderManeuver.addEventListener('input', updateSliderValues);
+sliderInclination.addEventListener('input', updateSliderValues);
+
+// Математика перелёта (формула изменения наклонения)
+// dV = 2 * V * sin(di / 2) * sqrt(1 / (sin(u)^2 + cos(u)^2 * cos(di)^2)) -> в упрощенном виде учитывает проекцию:
+function calculateDeltaV(uDeg, diDeg) {
+    const u = uDeg * Math.PI / 180;
+    const di = diDeg * Math.PI / 180;
+    
+    // Эффективность падает, если маневр делается вне узлов (0 или 180 градусов)
+    // Реальная базовая формула dV для наклонения: dV = 2 * V * sin(di/2). 
+    // Но если импульс приложен не в узле, мы вынуждены тратить энергию на компенсацию дрейфа линии узлов.
+    // Упрощенный коэффициент потерь: 1 / cos(минимального угла до узла)
+    const angleToNode = Math.min(uDeg % 180, 180 - (uDeg % 180));
+    const lossFactor = 1 + (angleToNode / 45) * 0.7; // штраф за неоптимальность
+    
+    const idealDV = 2 * ORBIT_SPEED * Math.sin(di / 2);
+    const actualDV = idealDV * lossFactor;
+    
+    return {
+        ideal: Math.round(idealDV),
+        actual: Math.round(actualDV)
+    };
 }
 
-function drawScene() {
+// Отрисовка 3D-проекции орбит на 2D Canvas
+function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const mAngleDeg = parseFloat(maneuverAngleInput.value);
-    const mAngleRad = (mAngleDeg * Math.PI) / 180;
-    const incDeltaDeg = parseFloat(inclinationDeltaInput.value);
-    const incRad = (incDeltaDeg * Math.PI) / 180;
-
-    // 1. Центральная планета
-    const planetProj = project3D(0, 0, 0);
+    
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    
+    // Центральное тело (Планета)
     ctx.beginPath();
-    ctx.arc(planetProj.x, planetProj.y, 14, 0, 2 * Math.PI);
+    ctx.arc(centerX, centerY, 30, 0, 2 * Math.PI);
     ctx.fillStyle = '#1e3a8a';
     ctx.fill();
-
-    // 2. Исходная орбита
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#3b82f6';
+    ctx.stroke();
+    
+    // Линия узлов (ось X, где плоскости пересекаются)
     ctx.beginPath();
-    for (let i = 0; i <= 360; i += 2) {
-        let rad = (i * Math.PI) / 180;
-        let x = a * Math.cos(rad) - focalDist;
-        let y = b * Math.sin(rad);
-        let pt = project3D(x, y, 0);
+    ctx.moveTo(centerX - ORBIT_RADIUS - 20, centerY);
+    ctx.lineTo(centerX + ORBIT_RADIUS + 20, centerY);
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.setLineDash([5, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
 
-        if (i === 0) ctx.moveTo(pt.x, pt.y);
-        else ctx.lineTo(pt.x, pt.y);
-    }
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    // Отрисовка Исходной орбиты (Плоская окружность в проекции изометрии)
+    ctx.beginPath();
+    ctx.ellipse(centerX, centerY, ORBIT_RADIUS, ORBIT_RADIUS * 0.5, 0, 0, 2 * Math.PI);
+    ctx.strokeStyle = '#64748b';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    
+    // Расчет параметров проекции Конечной орбиты (Наклоненный эллипс)
+    // Чем больше наклон, тем сильнее сжатие по вертикали и разворот
+    const tiltRad = (state.deltaI * 0.5) * Math.PI / 180;
+    
+    ctx.beginPath();
+    ctx.ellipse(centerX, centerY, ORBIT_RADIUS, ORBIT_RADIUS * 0.5 * Math.cos(tiltRad), tiltRad * 0.3, 0, 2 * Math.PI);
+    ctx.strokeStyle = '#10b981';
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // 3. Новая орбита
-    if (isManeuvering || hasManeuvered) {
-        ctx.beginPath();
-        for (let i = 0; i <= 360; i += 2) {
-            let rad = (i * Math.PI) / 180;
-            let x_flat = a * Math.cos(rad) - focalDist;
-            let y_flat = b * Math.sin(rad);
-
-            let z3d = Math.sin(rad - mAngleRad) * a * Math.sin(incRad * animProgress);
-            let y3d_simple = y_flat * Math.cos(incRad * animProgress);
-
-            let pt = project3D(x_flat, y3d_simple, z3d);
-
-            if (i === 0) ctx.moveTo(pt.x, pt.y);
-            else ctx.lineTo(pt.x, pt.y);
-        }
-        ctx.strokeStyle = `rgba(16, 185, 129, ${Math.max(0.2, animProgress)})`;
-        ctx.lineWidth = 2.5;
-        ctx.stroke();
-    }
-
-    // 4. Точка маневра
-    let mx = a * Math.cos(mAngleRad) - focalDist;
-    let my = b * Math.sin(mAngleRad);
-    let targetProj = project3D(mx, my, 0);
-
+    // Точка манёвра (метка на орбите)
+    const mRad = state.maneuverAngle * Math.PI / 180;
+    const mX = centerX + ORBIT_RADIUS * Math.cos(mRad);
+    // Проекция сжатия исходной плоскости
+    const mY = centerY + ORBIT_RADIUS * 0.5 * Math.sin(mRad);
+    
     ctx.beginPath();
-    ctx.arc(targetProj.x, targetProj.y, 6, 0, 2 * Math.PI);
+    ctx.arc(mX, mY, 6, 0, 2 * Math.PI);
     ctx.fillStyle = '#f59e0b';
     ctx.fill();
-
-    // 5. Корабль и импульс
-    let shipX = a * Math.cos(shipAnomaly) - focalDist;
-    let shipY = b * Math.sin(shipAnomaly);
-    let shipZ = 0;
-
-    if (hasManeuvered) {
-        shipZ = Math.sin(shipAnomaly - mAngleRad) * a * Math.sin(incRad);
-        shipY = shipY * Math.cos(incRad);
+    
+    // Отрисовка Космического Аппарата
+    const shipRad = state.shipAngle * Math.PI / 180;
+    let shipX, shipY;
+    
+    if (state.maneuverDone) {
+        // Движется по целевой наклоненной орбите
+        shipX = centerX + ORBIT_RADIUS * Math.cos(shipRad);
+        shipY = centerY + ORBIT_RADIUS * 0.5 * Math.cos(tiltRad) * Math.sin(shipRad + tiltRad * 0.3);
+    } else {
+        // Движется по исходной орбите
+        shipX = centerX + ORBIT_RADIUS * Math.cos(shipRad);
+        shipY = centerY + ORBIT_RADIUS * 0.5 * Math.sin(shipRad);
     }
-
-    let shipProj = project3D(shipX, shipY, shipZ);
-
-    if (isManeuvering) {
-        let vectorProj = project3D(shipX, shipY, shipZ + (incDeltaDeg * 0.8));
-        ctx.beginPath();
-        ctx.moveTo(shipProj.x, shipProj.y);
-        ctx.lineTo(vectorProj.x, vectorProj.y);
-        ctx.strokeStyle = '#ef4444';
-        ctx.lineWidth = 3;
-        ctx.stroke();
-    }
-
+    
     ctx.beginPath();
-    ctx.arc(shipProj.x, shipProj.y, 5, 0, 2 * Math.PI);
-    ctx.fillStyle = isManeuvering ? '#ef4444' : '#f97316';
+    ctx.arc(shipX, shipY, 8, 0, 2 * Math.PI);
+    ctx.fillStyle = '#ef4444';
     ctx.fill();
-
-    // Обновление текстовой инфо-панели (защита от отсутствия элементов в HTML)
-    const telemetryContainer = document.querySelector('.telemetry-overlay');
-    if (telemetryContainer) {
-        const currentV = getOrbitalVelocity(shipAnomaly);
-        const currentDeg = Math.round(shipAnomaly * 180 / Math.PI) % 360;
-        telemetryContainer.innerHTML = `
-            <div>Скорость корабля: <b>${Math.round(currentV * 10)}</b> м/с</div>
-            <div>Угол (аномалия): <b>${currentDeg}°</b></div>
-            <div style="font-size:10px; color:#8da2bb; margin-top:4px;">💡 Сцену можно вращать мышкой</div>
-        `;
-    }
+    ctx.strokeStyle = '#fff';
+    ctx.stroke();
 }
 
-function updatePhysics() {
-    if (!isManeuvering) {
-        let r = (a * (1 - e * e)) / (1 + e * Math.cos(shipAnomaly));
-        let angularVelocity = Math.sqrt(mu / (r * r * r)) * 0.4; 
-        shipAnomaly += angularVelocity;
-        
-        if (shipAnomaly > 2 * Math.PI) {
-            shipAnomaly -= 2 * Math.PI;
-        }
+// Главный цикл симуляции
+function simulationLoop() {
+    if (!state.running) return;
+    
+    // Движение спутника по орбите
+    state.shipAngle = (state.shipAngle + 2) % 360;
+    telPos.innerText = state.shipAngle;
+    
+    // Проверка достижения точки манёвра
+    if (!state.maneuverDone && Math.abs(state.shipAngle - state.maneuverAngle) <= 2) {
+        state.maneuverDone = true;
+        evaluateManeuver();
+    }
+    
+    draw();
+    requestAnimationFrame(simulationLoop);
+}
 
-        if (window.targetAnomaly !== undefined && !hasManeuvered) {
-            let diff = Math.abs(shipAnomaly - window.targetAnomaly);
-            if (diff < 0.08 || diff > 2 * Math.PI - 0.08) {
-                shipAnomaly = window.targetAnomaly; 
-                isManeuvering = true;
-                animProgress = 0;
-            }
+// Оценка результатов манёвра
+function evaluateManeuver() {
+    const costs = calculateDeltaV(state.maneuverAngle, state.deltaI);
+    
+    resDeltaV.innerText = costs.actual + " м/с";
+    resIdealV.innerText = costs.ideal + " м/с";
+    
+    const isNode = (state.maneuverAngle === 0 || state.maneuverAngle === 180 || state.maneuverAngle === 360);
+    
+    if (costs.actual <= FUEL_BUDGET) {
+        statusMessage.className = "status-msg success";
+        if (isNode) {
+            statusMessage.innerHTML = `<strong>Успех (Идеально)!</strong> Вы выполнили манёвр точно в узле орбиты. Затраты топлива минимальны (${costs.actual} м/с). Плоскость успешно изменена!`;
+        } else {
+            statusMessage.innerHTML = `<strong>Успех!</strong> Изменение плоскости выполнено. Вы уложились в лимит топлива (${FUEL_BUDGET} м/с), но затратили больше оптимального из-за смещения от узла.`;
         }
     } else {
-        animProgress += 0.02;
-        if (animProgress >= 1) {
-            animProgress = 1;
-            isManeuvering = false;
-            hasManeuvered = true;
-            window.targetAnomaly = undefined;
-            
-            calculateManeuver();
-            if (resultSection) resultSection.classList.remove('hidden');
-            maneuverAngleInput.disabled = false;
-            inclinationDeltaInput.disabled = false;
-        }
+        statusMessage.className = "status-msg error";
+        statusMessage.innerHTML = `<strong>Неудача (Крах миссии)!</strong> Затраты составили ${costs.actual} м/с, что превышает запас топлива в ${FUEL_BUDGET} м/с. Изменение плоскости в этой точке крайне неэффективно. Нацельтесь на узлы орбиты (0° или 180°).`;
     }
 }
 
-function calculateManeuver() {
-    const thetaDeg = parseFloat(maneuverAngleInput.value);
-    const thetaRad = (thetaDeg * Math.PI) / 180;
-    const deltaiDeg = parseFloat(inclinationDeltaInput.value);
-    const deltaiRad = (deltaiDeg * Math.PI) / 180;
-
-    const V = getOrbitalVelocity(thetaRad) * 10; 
-    const dV = 2 * V * Math.sin(deltaiRad / 2);
-
-    const V_min = getOrbitalVelocity(Math.PI) * 10;
-    const min_dV = 2 * V_min * Math.sin(deltaiRad / 2);
-
-    let efficiency = dV > 0 ? Math.min(100, Math.round((min_dV / dV) * 100)) : 100;
-
-    if (resDeltaV) resDeltaV.textContent = Math.round(dV) + ' м/с';
-    if (resMinDeltaV) resMinDeltaV.textContent = Math.round(min_dV) + ' м/с';
-    if (resEfficiency) resEfficiency.textContent = efficiency + '%';
-
-    if (verdictBox) {
-        verdictBox.className = 'verdict-box';
-        let textHTML = ''; 
-
-        if (efficiency >= 90) {
-            verdictBox.classList.add('verdict-success');
-            if (verdictTitle) verdictTitle.textContent = '🚀 Успех! Оптимальный манёвр';
-            textHTML = `Вы выполнили манёвр на угле ${thetaDeg}° (вблизи Апоцентра). Здесь орбитальная скорость минимальна (${Math.round(V)} м/с), что позволило изменить наклонение плоскости с минимальными затратами характеристической скорости (&Delta;V).`;
-        } else {
-            verdictBox.classList.add('verdict-warning');
-            if (verdictTitle) verdictTitle.textContent = '⚠️ Неоптимальный манёвр';
-            textHTML = `Затраты &Delta;V составили ${Math.round(dV)} м/с. Изменение наклонения на угле ${thetaDeg}° неэффективно, так как корабль находится близко к перицентру, где его скорость максимальна (${Math.round(V)} м/с). Затраты энергии пропорциональны текущей скорости аппарата.`;
-        }
-        
-        if (verdictText) verdictText.innerHTML = textHTML;
-    }
-}
-
-function gameLoop() {
-    updatePhysics();
-    drawScene();
-    requestAnimationFrame(gameLoop);
-}
-
-function startSimulation() {
-    if (isManeuvering || hasManeuvered) return;
+// Управление кнопками
+btnStart.addEventListener('click', () => {
+    if (state.running) return;
+    state.running = true;
+    state.maneuverDone = false;
+    state.shipAngle = (state.maneuverAngle + 180) % 360; // Начинаем с противоположной стороны для наглядности подлёта
     
-    const mAngleDeg = parseFloat(maneuverAngleInput.value);
-    window.targetAnomaly = (mAngleDeg * Math.PI) / 180;
-
-    if (resultSection) resultSection.classList.add('hidden');
-    maneuverAngleInput.disabled = true;
-    inclinationDeltaInput.disabled = true;
-}
-
-function resetSimulation() {
-    isManeuvering = false;
-    hasManeuvered = false;
-    window.targetAnomaly = undefined;
-    animProgress = 0;
-    shipAnomaly = 0;
+    resDeltaV.innerText = "--";
+    resIdealV.innerText = "--";
+    statusMessage.className = "status-msg warning";
+    statusMessage.innerText = "КА движется к точке выполнения манёвра. Ожидайте импульса...";
     
-    maneuverAngleInput.disabled = false;
-    inclinationDeltaInput.disabled = false;
-    maneuverAngleInput.value = 0;
-    inclinationDeltaInput.value = 15;
-    
-    if (resultSection) resultSection.classList.add('hidden');
-    maneuverAngleVal.textContent = '0°';
-    inclinationDeltaVal.textContent = '15°';
-}
+    simulationLoop();
+});
 
-// Вращение сцены мышкой
-canvas.addEventListener('mousedown', (e) => {
-    isDragging = true;
-    previousMouseX = e.clientX;
-    previousMouseY = e.clientY;
+btnReset.addEventListener('click', () => {
+    state.running = false;
+    state.maneuverDone = false;
+    state.shipAngle = 0;
+    
+    sliderManeuver.value = 0;
+    sliderInclination.value = 30;
+    updateSliderValues();
+    
+    resDeltaV.innerText = "--";
+    resIdealV.innerText = "--";
+    statusMessage.className = "status-msg";
+    statusMessage.innerText = "Настройте параметры и запустите моделирование для получения оценки.";
+    
+    draw();
 });
-window.addEventListener('mousemove', (e) => {
-if (!isDragging) return;
-let deltaX = e.clientX - previousMouseX;
-let deltaY = e.clientY - previousMouseY;
-cameraAngleZ += deltaX * 0.01;
-cameraAngleX += deltaY * 0.01;
-cameraAngleX = Math.max(0.1, Math.min(Math.PI / 2 - 0.05, cameraAngleX));
-previousMouseX = e.clientX;
-previousMouseY = e.clientY;
-});
-window.addEventListener('mouseup', () => { isDragging = false; });
-// Обработка тач-событий для смартфонов (исправленная безопасная логика)
-canvas.addEventListener('touchstart', (e) => {
-if (e.touches && e.touches[0]) {
-isDragging = true;
-previousMouseX = e.touches[0].clientX;
-previousMouseY = e.touches[0].clientY;
-}
-}, { passive: true });
-window.addEventListener('touchmove', (e) => {
-if (!isDragging || !e.touches || !e.touches[0]) return;
-let deltaX = e.touches[0].clientX - previousMouseX;
-let deltaY = e.touches[0].clientY - previousMouseY;
-cameraAngleZ += deltaX * 0.01;
-cameraAngleX += deltaY * 0.01;
-cameraAngleX = Math.max(0.1, Math.min(Math.PI / 2 - 0.05, cameraAngleX));
-previousMouseX = e.touches[0].clientX;
-previousMouseY = e.touches[0].clientY;
-}, { passive: true });
-window.addEventListener('touchend', () => { isDragging = false; });
-// Слушатели ползунков
-maneuverAngleInput.addEventListener('input', () => {
-maneuverAngleVal.textContent = maneuverAngleInput.value + '°';
-});
-inclinationDeltaInput.addEventListener('input', () => {
-inclinationDeltaVal.textContent = inclinationDeltaInput.value + '°';
-});
-startBtn.addEventListener('click', startSimulation);
-resetBtn.addEventListener('click', resetSimulation);
-// Старт программы
-window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
-gameLoop();
+
+// Первичная отрисовка при загрузке страницы
+updateSliderValues();
