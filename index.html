@@ -3,23 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Изменение плоскости орбиты</title>
+    <title>Изменение плоскости орбиты 3D</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div id="app-container">
         <header>
-            <h1>Изменение плоскости орбиты</h1>
-            <p class="subtitle">Учебный симулятор зависимости манёвра наклонения от точки импульса</p>
+            <h1>Орбитальные манёвры: 3D-Изменение плоскости</h1>
+            <p class="subtitle">Вращайте сцену мышкой/пальцем, чтобы рассмотреть наклонение орбит</p>
         </header>
 
         <main>
-            <!-- Левая панель: Визуализация -->
+            <!-- Левая панель: 3D Визуализация -->
             <section class="visual-section">
                 <canvas id="orbitCanvas"></canvas>
                 <div class="telemetry">
-                    <div>Текущее положение: <span id="telPos">0</span>°</div>
-                    <div>Скорость КА (V): <span id="telSpeed">300</span> м/с</div>
+                    <div>Положение КА: <span id="telPos">0</span>°</div>
+                    <div>Скорость (V): <span id="telSpeed">300</span> м/с</div>
                 </div>
             </section>
 
@@ -29,14 +29,19 @@
                     <h2>Настройки манёвра</h2>
                     
                     <div class="control-group">
+                        <label for="fuelLimit">Лимит топлива (Бюджет ΔV, м/с):</label>
+                        <input type="number" id="fuelLimit" min="50" max="600" value="220" step="10">
+                    </div>
+
+                    <div class="control-group">
                         <label for="maneuverAngle">Точка манёвра (угол на орбите): <span id="valManeuver">0</span>°</label>
                         <input type="range" id="maneuverAngle" min="0" max="360" value="0" step="5">
-                        <small class="hint">Подсказка: 0° и 180° — узлы орбиты (линия пересечения плоскостей).</small>
+                        <small class="hint">Узлы орбиты находятся на 0° и 180°.</small>
                     </div>
 
                     <div class="control-group">
                         <label for="targetInclination">Требуемое изменение наклонения (Δi): <span id="valInclination">30</span>°</label>
-                        <input type="range" id="targetInclination" min="10" max="60" value="30" step="5">
+                        <input type="range" id="targetInclination" min="5" max="75" value="30" step="5">
                     </div>
 
                     <div class="button-actions">
@@ -53,19 +58,19 @@
                             <span id="resDeltaV" class="value">--</span>
                         </div>
                         <div class="metric-box">
-                            <span class="label">Идеальный ΔV (в узле):</span>
+                            <span class="label">Теоретический минимум:</span>
                             <span id="resIdealV" class="value">--</span>
                         </div>
                     </div>
                     <div id="statusMessage" class="status-msg">
-                        Настройте параметры и запустите моделирование для получения оценки.
+                        Настройте параметры, задайте лимит и запустите моделирование. Сцену выше можно вращать!
                     </div>
                 </div>
             </section>
         </main>
         
         <footer>
-            <p>Учебная модель. Расчёты выполнены по упрощенным формулам изменения наклонения круговых орбит.</p>
+            <p>Учебная 3D-модель. Проекция трехмерного пространства рассчитана вручную матрицей поворота вокруг осей X и Y.</p>
         </footer>
     </div>
     <script src="script.js"></script>
